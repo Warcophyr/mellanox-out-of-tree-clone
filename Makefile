@@ -3,8 +3,25 @@
 # Makefile for the Mellanox device drivers.
 #
 
-obj-$(CONFIG_MLX4_CORE) += mlx4/
-obj-$(CONFIG_MLX5_CORE) += mlx5/core/
-obj-$(CONFIG_MLXSW_CORE) += mlxsw/
-obj-$(CONFIG_MLXFW) += mlxfw/
-obj-$(CONFIG_MLXBF_GIGE) += mlxbf_gige/
+.PHONY: all reload load reset clean
+
+all:
+	@echo "Building Mellanox device drivers..."
+	( cd ./mlx5/core; $(MAKE) )
+
+reload:
+	@echo "Reloading Mellanox device drivers..."
+	( cd ./mlx5/core; $(MAKE) reload )
+
+load:
+	@echo "Loading Mellanox device drivers..."
+	sudo rmmod mlx5_ib
+	( cd ./mlx5/core; $(MAKE) reload )
+
+reset:
+	@echo "Resetting to standard Mellanox drivers..."
+	( cd ./mlx5/core; $(MAKE) reset )
+
+clean:
+	@echo "Cleaning Mellanox device drivers..."
+	( cd ./mlx5/core; $(MAKE) clean )

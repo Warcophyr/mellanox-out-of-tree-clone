@@ -4,7 +4,42 @@
 # (ConnectX series) core & netdev driver
 #
 
-subdir-ccflags-y += -I$(src)
+subdir-ccflags-y += -I$(src) -g
+
+CONFIG_MLX4_EN=m
+CONFIG_MLX4_EN_DCB=y
+CONFIG_MLX4_CORE=m
+CONFIG_MLX4_DEBUG=y
+CONFIG_MLX4_CORE_GEN2=y
+CONFIG_MLX5_CORE=m
+CONFIG_MLX5_FPGA=y
+CONFIG_MLX5_CORE_EN=y
+CONFIG_MLX5_EN_ARFS=y
+CONFIG_MLX5_EN_RXNFC=y
+CONFIG_MLX5_MPFS=y
+CONFIG_MLX5_ESWITCH=y
+CONFIG_MLX5_BRIDGE=y
+CONFIG_MLX5_CLS_ACT=y
+CONFIG_MLX5_TC_CT=y
+CONFIG_MLX5_TC_SAMPLE=y
+CONFIG_MLX5_CORE_EN_DCB=y
+CONFIG_MLX5_CORE_IPOIB=y
+CONFIG_MLX5_MACSEC=y
+CONFIG_MLX5_EN_IPSEC=y
+CONFIG_MLX5_EN_TLS=y
+CONFIG_MLX5_SW_STEERING=y
+CONFIG_MLX5_SF=y
+CONFIG_MLX5_SF_MANAGER=y
+CONFIG_MLX5_DPLL=m
+CONFIG_MLXSW_CORE=m
+CONFIG_MLXSW_CORE_HWMON=y
+CONFIG_MLXSW_CORE_THERMAL=y
+CONFIG_MLXSW_PCI=m
+CONFIG_MLXSW_I2C=m
+CONFIG_MLXSW_SPECTRUM=m
+CONFIG_MLXSW_SPECTRUM_DCB=y
+CONFIG_MLXSW_MINIMAL=m
+CONFIG_MLXFW=m
 
 obj-$(CONFIG_MLX5_CORE) += mlx5_core.o
 
@@ -17,7 +52,7 @@ mlx5_core-y :=	main.o cmd.o debugfs.o fw.o eq.o uar.o pagealloc.o \
 		fs_counters.o fs_ft_pool.o rl.o lag/debugfs.o lag/lag.o dev.o events.o wq.o lib/gid.o \
 		lib/devcom.o lib/pci_vsc.o lib/dm.o lib/fs_ttc.o diag/fs_tracepoint.o \
 		diag/fw_tracer.o diag/crdump.o devlink.o diag/rsc_dump.o diag/reporter_vnic.o \
-		fw_reset.o qos.o lib/tout.o lib/aso.o wc.o fs_pool.o
+		fw_reset.o qos.o lib/tout.o lib/aso.o
 
 #
 # Netdev basic
@@ -29,7 +64,7 @@ mlx5_core-$(CONFIG_MLX5_CORE_EN) += en/rqt.o en/tir.o en/rss.o en/rx_res.o \
 		en/reporter_tx.o en/reporter_rx.o en/params.o en/xsk/pool.o \
 		en/xsk/setup.o en/xsk/rx.o en/xsk/tx.o en/devlink.o en/ptp.o \
 		en/qos.o en/htb.o en/trap.o en/fs_tt_redirect.o en/selq.o \
-		lib/crypto.o lib/sd.o en/pcie_cong_event.o
+		lib/crypto.o
 
 #
 # Netdev extra
@@ -60,7 +95,6 @@ mlx5_core-$(CONFIG_MLX5_CLS_ACT)     += en/tc/act/act.o en/tc/act/drop.o en/tc/a
 ifneq ($(CONFIG_MLX5_TC_CT),)
 	mlx5_core-y			     += en/tc_ct.o en/tc/ct_fs_dmfs.o
 	mlx5_core-$(CONFIG_MLX5_SW_STEERING) += en/tc/ct_fs_smfs.o
-	mlx5_core-$(CONFIG_MLX5_HW_STEERING) += en/tc/ct_fs_hmfs.o
 endif
 
 mlx5_core-$(CONFIG_MLX5_TC_SAMPLE)   += en/tc/sample.o
@@ -110,53 +144,16 @@ mlx5_core-$(CONFIG_MLX5_EN_TLS) += en_accel/ktls_stats.o \
 				   en_accel/fs_tcp.o en_accel/ktls.o en_accel/ktls_txrx.o \
 				   en_accel/ktls_tx.o en_accel/ktls_rx.o
 
-#
-# SW Steering
-#
-mlx5_core-$(CONFIG_MLX5_SW_STEERING) += steering/sws/dr_domain.o \
-					steering/sws/dr_table.o \
-					steering/sws/dr_matcher.o \
-					steering/sws/dr_rule.o \
-					steering/sws/dr_icm_pool.o \
-					steering/sws/dr_buddy.o \
-					steering/sws/dr_ste.o \
-					steering/sws/dr_send.o \
-					steering/sws/dr_ste_v0.o \
-					steering/sws/dr_ste_v1.o \
-					steering/sws/dr_ste_v2.o \
-					steering/sws/dr_ste_v3.o \
-					steering/sws/dr_cmd.o \
-					steering/sws/dr_fw.o \
-					steering/sws/dr_action.o \
-					steering/sws/dr_definer.o \
-					steering/sws/dr_ptrn.o \
-					steering/sws/dr_arg.o \
-					steering/sws/dr_dbg.o \
-					steering/sws/fs_dr.o \
-					lib/smfs.o
-
-#
-# HW Steering
-#
-mlx5_core-$(CONFIG_MLX5_HW_STEERING) += steering/hws/cmd.o \
-					steering/hws/context.o \
-					steering/hws/pat_arg.o \
-					steering/hws/buddy.o \
-					steering/hws/pool.o \
-					steering/hws/table.o \
-					steering/hws/action.o \
-					steering/hws/rule.o \
-					steering/hws/matcher.o \
-					steering/hws/send.o \
-					steering/hws/definer.o \
-					steering/hws/bwc.o \
-					steering/hws/debug.o \
-					steering/hws/vport.o \
-					steering/hws/bwc_complex.o \
-					steering/hws/fs_hws_pools.o \
-					steering/hws/fs_hws.o \
-					steering/hws/action_ste_pool.o
-
+mlx5_core-$(CONFIG_MLX5_SW_STEERING) += steering/dr_domain.o steering/dr_table.o \
+					steering/dr_matcher.o steering/dr_rule.o \
+					steering/dr_icm_pool.o steering/dr_buddy.o \
+					steering/dr_ste.o steering/dr_send.o \
+					steering/dr_ste_v0.o steering/dr_ste_v1.o \
+					steering/dr_ste_v2.o \
+					steering/dr_cmd.o steering/dr_fw.o \
+					steering/dr_action.o steering/fs_dr.o \
+					steering/dr_definer.o steering/dr_ptrn.o \
+					steering/dr_arg.o steering/dr_dbg.o lib/smfs.o
 #
 # SF device
 #
@@ -167,10 +164,45 @@ mlx5_core-$(CONFIG_MLX5_SF) += sf/vhca_event.o sf/dev/dev.o sf/dev/driver.o irq_
 #
 mlx5_core-$(CONFIG_MLX5_SF_MANAGER) += sf/cmd.o sf/hw_table.o sf/devlink.o
 
-#
-# TPH support
-#
-mlx5_core-$(CONFIG_PCIE_TPH) += lib/st.o
-
 obj-$(CONFIG_MLX5_DPLL) += mlx5_dpll.o
 mlx5_dpll-y :=	dpll.o
+
+
+COMPILEDB = $(which compiledb)
+
+all:
+	$(MAKE) -j 20 -C /lib/modules/`uname -r`/build M=$(PWD) modules
+
+clean:
+	$(MAKE) -C /lib/modules/`uname -r`/build M=$(PWD) clean
+
+load: 
+	-sudo rmmod mlx5_ib
+	make reload
+unload:
+	-sudo rmmod mlx5_core
+reset:
+	make unload
+	modprobe mlx5_core
+
+reload:
+	-sudo ip link set ${ETH} down
+	-sudo rmmod mlx5_core
+	-sudo insmod mlx5_core.ko
+	-sudo ip addr add dev ${ETH} 192.168.101.2/24
+	-sudo ip link set ${ETH} up
+	-sudo ethtool --set-priv-flags ${ETH} rx_striding_rq off
+	-sudo ip link set ${ETH} promisc on
+	-sudo ethtool --set-rxfh-indir ${ETH} equal 1
+	-sudo ethtool --set-priv-flags ${ETH} xdp_tx_mpwqe off
+
+.PHONY: original
+
+original:
+	-sudo ip link set ${ETH} down
+	-sudo rmmod mlx5_core
+	-sudo insmod mlx5_core.ko
+	-sudo ip addr add dev ${ETH} 192.168.101.2/24
+	-sudo ip link set ${ETH} up
+	-sudo ip link set ${ETH} promisc on
+	# -sudo ethtool --set-rxfh-indir ${ETH} equal 1

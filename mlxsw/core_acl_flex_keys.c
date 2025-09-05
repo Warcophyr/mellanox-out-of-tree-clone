@@ -5,7 +5,6 @@
 #include <linux/slab.h>
 #include <linux/list.h>
 #include <linux/errno.h>
-#include <linux/refcount.h>
 
 #include "item.h"
 #include "core_acl_flex_keys.h"
@@ -67,7 +66,7 @@ static bool mlxsw_afk_blocks_check(struct mlxsw_afk *mlxsw_afk)
 
 		for (j = 0; j < block->instances_count; j++) {
 			const struct mlxsw_afk_element_info *elinfo;
-			const struct mlxsw_afk_element_inst *elinst;
+			struct mlxsw_afk_element_inst *elinst;
 
 			elinst = &block->instances[j];
 			elinfo = &mlxsw_afk_element_infos[elinst->element];
@@ -108,7 +107,7 @@ EXPORT_SYMBOL(mlxsw_afk_destroy);
 
 struct mlxsw_afk_key_info {
 	struct list_head list;
-	refcount_t ref_count;
+	unsigned int ref_count;
 	unsigned int blocks_count;
 	int element_to_block[MLXSW_AFK_ELEMENT_MAX]; /* index is element, value
 						      * is index inside "blocks"
@@ -154,7 +153,7 @@ static void mlxsw_afk_picker_count_hits(struct mlxsw_afk *mlxsw_afk,
 		const struct mlxsw_afk_block *block = &mlxsw_afk->blocks[i];
 
 		for (j = 0; j < block->instances_count; j++) {
-			const struct mlxsw_afk_element_inst *elinst;
+			struct mlxsw_afk_element_inst *elinst;
 
 			elinst = &block->instances[j];
 			if (elinst->element == element) {
@@ -335,7 +334,7 @@ mlxsw_afk_key_info_create(struct mlxsw_afk *mlxsw_afk,
 	if (err)
 		goto err_picker;
 	list_add(&key_info->list, &mlxsw_afk->key_info_list);
-	refcount_set(&key_info->ref_count, 1);
+	key_info->ref_count = 1;
 	return key_info;
 
 err_picker:
@@ -357,7 +356,7 @@ mlxsw_afk_key_info_get(struct mlxsw_afk *mlxsw_afk,
 
 	key_info = mlxsw_afk_key_info_find(mlxsw_afk, elusage);
 	if (key_info) {
-		refcount_inc(&key_info->ref_count);
+		key_info->ref_count++;
 		return key_info;
 	}
 	return mlxsw_afk_key_info_create(mlxsw_afk, elusage);
@@ -366,7 +365,7 @@ EXPORT_SYMBOL(mlxsw_afk_key_info_get);
 
 void mlxsw_afk_key_info_put(struct mlxsw_afk_key_info *key_info)
 {
-	if (!refcount_dec_and_test(&key_info->ref_count))
+	if (--key_info->ref_count)
 		return;
 	mlxsw_afk_key_info_destroy(key_info);
 }
@@ -386,7 +385,7 @@ mlxsw_afk_block_elinst_get(const struct mlxsw_afk_block *block,
 	int i;
 
 	for (i = 0; i < block->instances_count; i++) {
-		const struct mlxsw_afk_element_inst *elinst;
+		struct mlxsw_afk_element_inst *elinst;
 
 		elinst = &block->instances[i];
 		if (elinst->element == element)
