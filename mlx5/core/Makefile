@@ -170,6 +170,8 @@ mlx5_dpll-y :=	dpll.o
 
 COMPILEDB = $(which compiledb)
 
+ETH := enp52s0f1np1
+
 all:
 	$(MAKE) -j 20 -C /lib/modules/`uname -r`/build M=$(PWD) modules
 
