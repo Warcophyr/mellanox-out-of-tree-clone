@@ -1603,6 +1603,8 @@ __bpf_kfunc_start_defs();
 
 __bpf_kfunc void bpf_clone(__u32 data, __u32 metasize, __u32 cqe_bcnt,
                            __u16 headroom) {
+  u16 *metadata;
+  void *va;
   // __bpf_kfunc void bpf_clone(struct xdp_md *ctx, __u16 headroom) {
   // mlx5e_build_linear_skb(NULL, NULL, 0, 0, 0, 0);
   // rx_headroom = mxbuf.xdp.data - mxbuf.xdp.data_hard_start;
@@ -1620,20 +1622,30 @@ __bpf_kfunc void bpf_clone(__u32 data, __u32 metasize, __u32 cqe_bcnt,
   printk(KERN_INFO "data: %u headroom: %u cqe_bcnt: %u\n metasize: %hu\n", data,
          headroom, cqe_bcnt, metasize);
 
-  void *va = data - headroom;
+  va = data - headroom;
   u32 frag_size = MLX5_SKB_FRAG_SZ(headroom + cqe_bcnt);
-  // struct sk_buff *skb = napi_build_skb(va, frag_size);
+  struct sk_buff *skb = napi_build_skb(va, frag_size);
+  metadata = (va + headroom) - sizeof(skb);
+  __builtin_memcpy(metadata, skb, sizeof(skb));
+  printk(KERN_EMERG "skb: %p\n", skb);
 
-  //   if (unlikely(!skb)) {
-  //     // rq->stats->buff_alloc_err++;
-  //     return;
-  //   }
+  if (unlikely(!skb)) {
+    // rq->stats->buff_alloc_err++;
+    return;
+  }
 
-  //   skb_reserve(skb, headroom);
-  //   skb_put(skb, cqe_bcnt);
+  skb_reserve(skb, headroom);
+  skb_put(skb, cqe_bcnt);
 
-  //   if (metasize)
-  //     skb_metadata_set(skb, metasize);
+  if (metasize)
+    skb_metadata_set(skb, metasize);
+
+  if (unlikely(!skb))
+    return;
+
+  /* queue up for recycling/reuse */
+  skb_mark_for_recycle(skb);
+  // frag_page->frags++;
 
   printk(KERN_INFO "Hello XDP has call\n");
   //   return skb;
@@ -1803,7 +1815,7 @@ static struct sk_buff *mlx5e_skb_from_cqe_linear(struct mlx5e_rq *rq,
 
   va = page_address(frag_page->page) + wi->offset;
   data = va + rx_headroom;
-  metadata = (va + rx_headroom) - 8;
+  metadata = (va + rx_headroom) - sizeof(skb);
   frag_size = MLX5_SKB_FRAG_SZ(rx_headroom + cqe_bcnt);
 
   addr = page_pool_get_dma_addr(frag_page->page);
@@ -1826,50 +1838,133 @@ static struct sk_buff *mlx5e_skb_from_cqe_linear(struct mlx5e_rq *rq,
     act = bpf_prog_run_xdp(prog, xdp);
     switch (act) {
     case XDP_CLONE:
+      u32 actcpy;
+      rx_headroom = mxbuf.xdp.data - mxbuf.xdp.data_hard_start;
+      metasize = mxbuf.xdp.data - mxbuf.xdp.data_meta;
+      cqe_bcnt = mxbuf.xdp.data_end - mxbuf.xdp.data;
+      frag_size = MLX5_SKB_FRAG_SZ(rx_headroom + cqe_bcnt);
+      // skb = napi_build_skb(va, frag_size);
+      skb = napi_alloc_skb(rq->cq.napi, cqe_bcnt);
+
+      if (unlikely(!skb)) {
+        rq->stats->buff_alloc_err++;
+        return NULL;
+      }
+
+      skb_reserve(skb, rx_headroom);
+      skb_put_data(skb, data, cqe_bcnt);
+
+      if (metasize)
+        skb_metadata_set(skb, metasize);
+
+      /* queue up for recycling/reuse */
+      skb_mark_for_recycle(skb);
+      frag_page->frags++;
+
+      // mlx5e_fill_mxbuf(rq, cqe, va, rx_headroom, rq->buff.frame0_sz,
+      // cqe_bcnt,
+      //                  &mxbuf);
+      mxbuf.xdp.data_meta = va + rx_headroom + 8;
+      actcpy = bpf_prog_run_xdp(prog, xdp);
+
+      switch (actcpy) {
+      case XDP_TX:
+        if (unlikely(!mlx5e_xmit_xdp_buff(rq->xdpsq, rq, xdp)))
+          goto xdp_abort_cpy;
+        __set_bit(MLX5E_RQ_FLAG_XDP_XMIT, rq->flags); /* non-atomic */
+                                                      //   return true;
+        break;
+      case XDP_REDIRECT:
+        /* When XDP enabled then page-refcnt==1 here */
+        err = xdp_do_redirect(rq->netdev, xdp, prog);
+        if (unlikely(err))
+          goto xdp_abort_cpy;
+        __set_bit(MLX5E_RQ_FLAG_XDP_XMIT, rq->flags);
+        __set_bit(MLX5E_RQ_FLAG_XDP_REDIRECT, rq->flags);
+        rq->stats->xdp_redirect++;
+        //   return true;
+        break;
+      default:
+        bpf_warn_invalid_xdp_action(rq->netdev, prog, actcpy);
+        fallthrough;
+      case XDP_ABORTED:
+      xdp_abort_cpy:
+        trace_xdp_exception(rq->netdev, prog, actcpy);
+        fallthrough;
+      case XDP_DROP:
+        rq->stats->xdp_drop++;
+        //   return true;
+        break;
+      }
+      return skb;
+      // goto xdp_abort;
       // printk(KERN_INFO "sono nel kernel2\n");
       // printk(KERN_INFO "\n\n");
       //   return false;
       // err = xdp_do_redirect(rq->netdev, xdp, prog); // loopback
 
-      mlx5e_fill_mxbuf_metadata(rq, cqe, va, rx_headroom, rq->buff.frame0_sz,
-                                cqe_bcnt, &mxbuf);
+      // mlx5e_fill_mxbuf_metadata(rq, cqe, va, rx_headroom,
+      // rq->buff.frame0_sz, cqe_bcnt, &mxbuf);
 
-      err = xdp_do_redirect(rq->netdev, xdp, prog);
-      rx_headroom = mxbuf.xdp.data - mxbuf.xdp.data_hard_start;
-      metasize = mxbuf.xdp.data - mxbuf.xdp.data_meta;
-      cqe_bcnt = mxbuf.xdp.data_end - mxbuf.xdp.data;
-      frag_size = MLX5_SKB_FRAG_SZ(rx_headroom + cqe_bcnt);
-      skb = mlx5e_build_linear_skb(rq, va, frag_size, rx_headroom, cqe_bcnt,
-                                   metasize);
-      if (unlikely(!skb))
-        return NULL;
-
-      /* queue up for recycling/reuse */
-      skb_mark_for_recycle(skb);
-      frag_page->frags++;
-
-      __set_bit(MLX5E_RQ_FLAG_XDP_XMIT, rq->flags);
-      __set_bit(MLX5E_RQ_FLAG_XDP_REDIRECT, rq->flags);
-      rq->stats->xdp_redirect++;
-
-      return skb;
-    case XDP_PASS:
-      //   return false;
-      rx_headroom = mxbuf.xdp.data - mxbuf.xdp.data_hard_start;
-      metasize = mxbuf.xdp.data - mxbuf.xdp.data_meta;
-      cqe_bcnt = mxbuf.xdp.data_end - mxbuf.xdp.data;
-      frag_size = MLX5_SKB_FRAG_SZ(rx_headroom + cqe_bcnt);
-      skb = mlx5e_build_linear_skb(rq, va, frag_size, rx_headroom, cqe_bcnt,
-                                   metasize);
-      if (unlikely(!skb))
-        return NULL;
-
-      /* queue up for recycling/reuse */
-      skb_mark_for_recycle(skb);
-      frag_page->frags++;
-
-      return skb;
+      // err = xdp_do_redirect(rq->netdev, xdp, prog);
+      // rx_headroom = mxbuf.xdp.data - mxbuf.xdp.data_hard_start;
+      // metasize = mxbuf.xdp.data - mxbuf.xdp.data_meta;
+      // cqe_bcnt = mxbuf.xdp.data_end - mxbuf.xdp.data;
+      // frag_size = MLX5_SKB_FRAG_SZ(rx_headroom + cqe_bcnt);
+      // skb = mlx5e_build_linear_skb(rq, va, frag_size, rx_headroom,
+      // cqe_bcnt,
+      //                              metasize);
+      // if (unlikely(!skb))
       //   return NULL;
+
+      // /* queue up for recycling/reuse */
+      // skb_mark_for_recycle(skb);
+      // frag_page->frags++;
+
+      // __set_bit(MLX5E_RQ_FLAG_XDP_XMIT, rq->flags);
+      // __set_bit(MLX5E_RQ_FLAG_XDP_REDIRECT, rq->flags);
+      // rq->stats->xdp_redirect++;
+
+      // return skb;
+
+      // rx_headroom = mxbuf.xdp.data - mxbuf.xdp.data_hard_start;
+      // metasize = mxbuf.xdp.data - mxbuf.xdp.data_meta;
+      // cqe_bcnt = mxbuf.xdp.data_end - mxbuf.xdp.data;
+      // frag_size = MLX5_SKB_FRAG_SZ(rx_headroom + cqe_bcnt);
+      // skb = mlx5e_build_linear_skb(rq, va, frag_size, rx_headroom,
+      // cqe_bcnt,
+      //                              metasize);
+      // if (unlikely(!skb))
+      //   return NULL;
+
+      // /* queue up for recycling/reuse */
+      // skb_mark_for_recycle(skb);
+      // frag_page->frags++;
+      // if (unlikely(!skb))
+      //   return NULL;
+
+      // /* queue up for recycling/reuse */
+      // skb_mark_for_recycle(skb);
+      // frag_page->frags++;
+
+      // return NULL;
+      // return skb;
+    case XDP_PASS:
+      rx_headroom = mxbuf.xdp.data - mxbuf.xdp.data_hard_start;
+      metasize = mxbuf.xdp.data - mxbuf.xdp.data_meta;
+      cqe_bcnt = mxbuf.xdp.data_end - mxbuf.xdp.data;
+      frag_size = MLX5_SKB_FRAG_SZ(rx_headroom + cqe_bcnt);
+      skb = mlx5e_build_linear_skb(rq, va, frag_size, rx_headroom, cqe_bcnt,
+                                   metasize);
+      if (unlikely(!skb))
+        return NULL;
+
+      /* queue up for recycling/reuse */
+      skb_mark_for_recycle(skb);
+      frag_page->frags++;
+
+      return skb;
+      //   return false;
     case XDP_TX:
       if (unlikely(!mlx5e_xmit_xdp_buff(rq->xdpsq, rq, xdp)))
         goto xdp_abort;
@@ -1917,6 +2012,16 @@ static struct sk_buff *mlx5e_skb_from_cqe_linear(struct mlx5e_rq *rq,
 
     //   return skb;
   }
+  frag_size = MLX5_SKB_FRAG_SZ(rx_headroom + cqe_bcnt);
+  skb = mlx5e_build_linear_skb(rq, va, frag_size, rx_headroom, cqe_bcnt,
+                               metasize);
+  if (unlikely(!skb))
+    return NULL;
+
+  /* queue up for recycling/reuse */
+  skb_mark_for_recycle(skb);
+  frag_page->frags++;
+
   return skb;
 }
 
