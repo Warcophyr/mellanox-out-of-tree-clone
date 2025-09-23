@@ -63,6 +63,7 @@
 #include <linux/bpf_trace.h>
 #include <linux/btf.h>
 #include <linux/btf_ids.h>
+// #include <linux/skbuff.h>
 
 struct mlx5e_rq *rq_global = NULL;
 struct mlx5_cqe64 *cqe_global = NULL;
@@ -1641,7 +1642,15 @@ __bpf_kfunc void bpf_clone(__u32 data, __u32 metasize, __u32 cqe_bcnt,
   }
 
   skb_reserve(skb, headroom);
-  skb_put_data(skb, data, cqe_bcnt); // questa fa crashare il kernel
+  // skb_put_data(skb, data, cqe_bcnt); // questa fa crashare il kernel
+  // void *tmp = skb_tail_pointer(skb);
+  // SKB_LINEAR_ASSERT(skb);
+  // skb->tail += cqe_bcnt;
+  // skb->len += cqe_bcnt;
+  // if (unlikely(skb->tail > skb->end))
+  //   skb_over_panic(skb, cqe_bcnt, __builtin_return_address(0));
+
+  // memcpy(tmp, data, cqe_bcnt);
 
   if (metasize)
     skb_metadata_set(skb, metasize);
@@ -1886,12 +1895,13 @@ static struct sk_buff *mlx5e_skb_from_cqe_linear(struct mlx5e_rq *rq,
       // mlx5e_fill_mxbuf(rq, cqe, va, rx_headroom, rq->buff.frame0_sz,
       // cqe_bcnt,
       //                  &mxbuf);
+    xdp_clone:
+      struct sk_buff *skbcpy;
       mxbuf.xdp.data_meta = va + rx_headroom + 8;
       actcpy = bpf_prog_run_xdp(prog, xdp);
       mxbuf.xdp.data_meta = va + rx_headroom - 8;
       switch (actcpy) {
-      case XDP_PASS:
-        struct sk_buff *skbcpy;
+      case XDP_CLONE:
         skbcpy = napi_alloc_skb(rq->cq.napi, cqe_bcnt);
 
         if (unlikely(!skbcpy)) {
@@ -1919,7 +1929,36 @@ static struct sk_buff *mlx5e_skb_from_cqe_linear(struct mlx5e_rq *rq,
 
           napi_gro_receive(rq->cq.napi, skbcpy);
         }
-        printk(KERN_INFO "XDP copy XDP_PASS\n");
+        goto xdp_clone;
+      case XDP_PASS:
+        skbcpy = napi_alloc_skb(rq->cq.napi, cqe_bcnt);
+
+        if (unlikely(!skbcpy)) {
+          rq->stats->buff_alloc_err++;
+          break;
+        }
+
+        skb_reserve(skbcpy, rx_headroom);
+        skb_put_data(skbcpy, data, cqe_bcnt);
+
+        if (metasize)
+          skb_metadata_set(skbcpy, metasize);
+
+        /* queue up for recycling/reuse */
+        skb_mark_for_recycle(skbcpy);
+        if (skbcpy) {
+
+          mlx5e_complete_rx_cqe(rq, cqe, cqe_bcnt, skbcpy);
+
+          if (mlx5e_cqe_regb_chain(cqe))
+            if (!mlx5e_tc_update_skb_nic(cqe, skbcpy)) {
+              dev_kfree_skb_any(skbcpy);
+              break;
+            }
+
+          napi_gro_receive(rq->cq.napi, skbcpy);
+        }
+        // printk(KERN_INFO "XDP copy XDP_PASS\n");
         break;
       case XDP_TX:
         if (unlikely(!mlx5e_xmit_xdp_buff(rq->xdpsq, rq, xdp)))
