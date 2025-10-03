@@ -1833,8 +1833,8 @@ static struct sk_buff *mlx5e_skb_from_cqe_linear(struct mlx5e_rq *rq,
   dma_addr_t addr;
   u32 frag_size;
   u16 *metadata;
-  rq_global = rq;
-  cqe_global = cqe;
+  // rq_global = rq;
+  // cqe_global = cqe;
   const int XDP_CLONE = 6;
 
   va = page_address(frag_page->page) + wi->offset;
@@ -1867,6 +1867,8 @@ static struct sk_buff *mlx5e_skb_from_cqe_linear(struct mlx5e_rq *rq,
     // printk(KERN_INFO "cqe_bcnt: %u", cqe_bcnt);
 
     act = bpf_prog_run_xdp(prog, xdp);
+    u32 skb_len_factor = 2;
+    u32 cqe_bcnt_skb = skb_len_factor * cqe_bcnt;
     switch (act) {
     case XDP_CLONE:
       u32 actcpy;
@@ -1875,7 +1877,7 @@ static struct sk_buff *mlx5e_skb_from_cqe_linear(struct mlx5e_rq *rq,
       cqe_bcnt = mxbuf.xdp.data_end - mxbuf.xdp.data;
       frag_size = MLX5_SKB_FRAG_SZ(rx_headroom + cqe_bcnt);
       // skb = napi_build_skb(va, frag_size);
-      skb = napi_alloc_skb(rq->cq.napi, cqe_bcnt);
+      skb = napi_alloc_skb(rq->cq.napi, cqe_bcnt_skb);
 
       if (unlikely(!skb)) {
         rq->stats->buff_alloc_err++;
@@ -1883,6 +1885,9 @@ static struct sk_buff *mlx5e_skb_from_cqe_linear(struct mlx5e_rq *rq,
       }
 
       skb_reserve(skb, rx_headroom);
+      // pr_info("1: tailroom=%u cqe_bcnt=%u\n", skb_tailroom(skb),
+      // cqe_bcnt_skb);
+
       skb_put_data(skb, data, cqe_bcnt);
 
       if (metasize)
@@ -1895,14 +1900,26 @@ static struct sk_buff *mlx5e_skb_from_cqe_linear(struct mlx5e_rq *rq,
       // mlx5e_fill_mxbuf(rq, cqe, va, rx_headroom, rq->buff.frame0_sz,
       // cqe_bcnt,
       //                  &mxbuf);
+      struct sk_buff *skbptr = skb;
     xdp_clone:
       struct sk_buff *skbcpy;
       mxbuf.xdp.data_meta = va + rx_headroom + 8;
       actcpy = bpf_prog_run_xdp(prog, xdp);
       mxbuf.xdp.data_meta = va + rx_headroom - 8;
+      if ((skb_tailroom(skbptr) - ((int)cqe_bcnt_skb)) < cqe_bcnt) {
+        skb_len_factor += 1;
+        cqe_bcnt_skb = skb_len_factor * cqe_bcnt;
+        // pr_info("1.5: tailroom=%u cqe_bcnt=%u\n", skb_tailroom(skbptr),
+        //         cqe_bcnt_skb);
+      }
+      // pr_info("2: tailroom=%u cqe_bcnt=%u\n", skb_tailroom(skbptr),
+      //         cqe_bcnt_skb);
       switch (actcpy) {
       case XDP_CLONE:
-        skbcpy = napi_alloc_skb(rq->cq.napi, cqe_bcnt);
+        skbcpy = napi_alloc_skb(rq->cq.napi, cqe_bcnt_skb);
+        skbptr = skbcpy;
+        // pr_info("3: tailroom=%u cqe_bcnt=%u\n", skb_tailroom(skbptr),
+        //         cqe_bcnt_skb);
 
         if (unlikely(!skbcpy)) {
           rq->stats->buff_alloc_err++;
@@ -1924,14 +1941,17 @@ static struct sk_buff *mlx5e_skb_from_cqe_linear(struct mlx5e_rq *rq,
           if (mlx5e_cqe_regb_chain(cqe))
             if (!mlx5e_tc_update_skb_nic(cqe, skbcpy)) {
               dev_kfree_skb_any(skbcpy);
-              break;
+              goto xdp_clone_exit;
             }
 
           napi_gro_receive(rq->cq.napi, skbcpy);
         }
         goto xdp_clone;
       case XDP_PASS:
-        skbcpy = napi_alloc_skb(rq->cq.napi, cqe_bcnt);
+        skbcpy = napi_alloc_skb(rq->cq.napi, cqe_bcnt_skb);
+        skbptr = skbcpy;
+        // pr_info("4: tailroom=%u cqe_bcnt=%u\n", skb_tailroom(skbptr),
+        //         cqe_bcnt_skb);
 
         if (unlikely(!skbcpy)) {
           rq->stats->buff_alloc_err++;
@@ -1953,7 +1973,7 @@ static struct sk_buff *mlx5e_skb_from_cqe_linear(struct mlx5e_rq *rq,
           if (mlx5e_cqe_regb_chain(cqe))
             if (!mlx5e_tc_update_skb_nic(cqe, skbcpy)) {
               dev_kfree_skb_any(skbcpy);
-              break;
+              goto xdp_clone_exit;
             }
 
           napi_gro_receive(rq->cq.napi, skbcpy);
@@ -1988,6 +2008,7 @@ static struct sk_buff *mlx5e_skb_from_cqe_linear(struct mlx5e_rq *rq,
         //   return true;
         break;
       }
+    xdp_clone_exit:
       return skb;
     case XDP_PASS:
       rx_headroom = mxbuf.xdp.data - mxbuf.xdp.data_hard_start;
