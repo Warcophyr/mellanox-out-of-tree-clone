@@ -1878,7 +1878,7 @@ static struct sk_buff *mlx5e_skb_from_cqe_linear(struct mlx5e_rq *rq,
       int __num_copy = act >> 5;
       int __xdp_clone = (act & 0x1F);
       num_copy = __num_copy >= 0 ? __num_copy : 0;
-      // pr_info("xdp_clone=%d num_copy=%d\n", __xdp_clone, num_copy);
+      pr_info("xdp_clone=%d num_copy=%d\n", __xdp_clone, num_copy);
       act = __xdp_clone;
     }
     switch (act) {
@@ -1889,7 +1889,7 @@ static struct sk_buff *mlx5e_skb_from_cqe_linear(struct mlx5e_rq *rq,
       cqe_bcnt = mxbuf.xdp.data_end - mxbuf.xdp.data;
       frag_size = MLX5_SKB_FRAG_SZ(rx_headroom + cqe_bcnt);
       // skb = napi_build_skb(va, frag_size);
-      skb = napi_alloc_skb(rq->cq.napi, cqe_bcnt * (num_copy + 1));
+      skb = napi_alloc_skb(rq->cq.napi, cqe_bcnt);
       if (unlikely(!skb)) {
         rq->stats->buff_alloc_err++;
         return NULL;
@@ -1919,6 +1919,7 @@ static struct sk_buff *mlx5e_skb_from_cqe_linear(struct mlx5e_rq *rq,
 
         napi_gro_receive(rq->cq.napi, skb);
       }
+      struct sk_buff *skbcpy;
       for (int i = 0; i < num_copy; i++) {
         mxbuf.xdp.data_meta = va;
         int __num_copy = i + 1;
@@ -1930,47 +1931,80 @@ static struct sk_buff *mlx5e_skb_from_cqe_linear(struct mlx5e_rq *rq,
         }
         switch (actcpy) {
         case XDP_PASS: {
-          rx_headroom = mxbuf.xdp.data - mxbuf.xdp.data_hard_start;
-          metasize = mxbuf.xdp.data_meta - mxbuf.xdp.data;
-          cqe_bcnt = mxbuf.xdp.data_end - mxbuf.xdp.data;
-          frag_size = MLX5_SKB_FRAG_SZ(rx_headroom + cqe_bcnt);
-          if (unlikely(!skb)) {
+          skbcpy = napi_alloc_skb(rq->cq.napi, cqe_bcnt);
+          // skbptr = skbcpy;
+          // pr_info("4: tailroom=%u cqe_bcnt=%u\n", skb_tailroom(skbptr),
+          //         cqe_bcnt_skb);
+
+          if (unlikely(!skbcpy)) {
             rq->stats->buff_alloc_err++;
-            return NULL;
+            break;
           }
 
-          skb_reserve(skb, rx_headroom);
-          // pr_info("1: tailroom=%u cqe_bcnt=%u\n", skb_tailroom(skb),
-          // cqe_bcnt_skb);
-
-          skb_put_data(skb, data, cqe_bcnt);
+          skb_reserve(skbcpy, rx_headroom);
+          skb_put_data(skbcpy, data, cqe_bcnt);
 
           if (metasize)
-            skb_metadata_set(skb, metasize);
+            skb_metadata_set(skbcpy, metasize);
 
           /* queue up for recycling/reuse */
-          skb_mark_for_recycle(skb);
-          frag_page->frags++;
-          if (skb) {
+          skb_mark_for_recycle(skbcpy);
+          if (skbcpy) {
 
-            mlx5e_complete_rx_cqe(rq, cqe, cqe_bcnt, skb);
+            mlx5e_complete_rx_cqe(rq, cqe, cqe_bcnt, skbcpy);
 
             if (mlx5e_cqe_regb_chain(cqe))
-              if (!mlx5e_tc_update_skb_nic(cqe, skb)) {
-                dev_kfree_skb_any(skb);
+              if (!mlx5e_tc_update_skb_nic(cqe, skbcpy)) {
+                dev_kfree_skb_any(skbcpy);
                 goto xdp_clone_pass_exit;
               }
 
-            napi_gro_receive(rq->cq.napi, skb);
+            napi_gro_receive(rq->cq.napi, skbcpy);
           }
-          continue;
         } break;
+        // case XDP_PASS: {
+        //   rx_headroom = mxbuf.xdp.data - mxbuf.xdp.data_hard_start;
+        //   metasize = mxbuf.xdp.data_meta - mxbuf.xdp.data;
+        //   cqe_bcnt = mxbuf.xdp.data_end - mxbuf.xdp.data;
+        //   frag_size = MLX5_SKB_FRAG_SZ(rx_headroom + cqe_bcnt);
+        //   if (unlikely(!skb)) {
+        //     rq->stats->buff_alloc_err++;
+        //     return NULL;
+        //   }
+
+        //   skb_reserve(skb, rx_headroom);
+        //   // pr_info("1: tailroom=%u cqe_bcnt=%u\n", skb_tailroom(skb),
+        //   // cqe_bcnt_skb);
+
+        //   skb_put_data(skb, data, cqe_bcnt);
+
+        //   if (metasize)
+        //     skb_metadata_set(skb, metasize);
+
+        //   /* queue up for recycling/reuse */
+        //   // skb_mark_for_recycle(skb);
+        //   // frag_page->frags++;
+        //   // if (skb) {
+
+        //   //   mlx5e_complete_rx_cqe(rq, cqe, cqe_bcnt, skb);
+
+        //   //   if (mlx5e_cqe_regb_chain(cqe))
+        //   //     if (!mlx5e_tc_update_skb_nic(cqe, skb)) {
+        //   //       dev_kfree_skb_any(skb);
+        //   //       goto xdp_clone_pass_exit;
+        //   //     }
+
+        //   //   napi_gro_receive(rq->cq.napi, skb);
+        //   // }
+        // } break;
         case XDP_TX: {
           if (unlikely(!mlx5e_xmit_xdp_buff(rq->xdpsq, rq, xdp)))
             goto xdp_clone_pass_abort_cpy;
           __set_bit(MLX5E_RQ_FLAG_XDP_XMIT, rq->flags); /* non-atomic */
+          rcu_read_lock();
           mlx5e_xmit_xdp_doorbell(rq->xdpsq);
           mlx5e_poll_xdpsq_cq(&rq->xdpsq->cq);
+          rcu_read_unlock();
 
         } break;
         case XDP_REDIRECT: {
@@ -1999,7 +2033,7 @@ static struct sk_buff *mlx5e_skb_from_cqe_linear(struct mlx5e_rq *rq,
         }
       }
     xdp_clone_pass_exit:
-      return skb;
+      return NULL;
     }
     case XDP_CLONE_TX: {
       mxbuf.xdp.data_meta = va + rx_headroom;
@@ -2017,12 +2051,12 @@ static struct sk_buff *mlx5e_skb_from_cqe_linear(struct mlx5e_rq *rq,
       cqe_bcnt = mxbuf.xdp.data_end - mxbuf.xdp.data;
       frag_size = MLX5_SKB_FRAG_SZ(rx_headroom + cqe_bcnt);
       // skb = napi_build_skb(va, frag_size);
-      skb = napi_alloc_skb(rq->cq.napi, cqe_bcnt * (num_copy + 1));
-      if (unlikely(!skb)) {
-        rq->stats->buff_alloc_err++;
-        return NULL;
-      }
-
+      // skb = napi_alloc_skb(rq->cq.napi, cqe_bcnt * (num_copy + 1));
+      // if (unlikely(!skb)) {
+      //   rq->stats->buff_alloc_err++;
+      //   return NULL;
+      // }
+      struct sk_buff *skbcpy;
       for (int i = 0; i < num_copy; i++) {
         mxbuf.xdp.data_meta = va;
         int __num_copy = i + 1;
@@ -2034,39 +2068,70 @@ static struct sk_buff *mlx5e_skb_from_cqe_linear(struct mlx5e_rq *rq,
         }
         switch (actcpy) {
         case XDP_PASS: {
-          rx_headroom = mxbuf.xdp.data - mxbuf.xdp.data_hard_start;
-          metasize = mxbuf.xdp.data_meta - mxbuf.xdp.data;
-          cqe_bcnt = mxbuf.xdp.data_end - mxbuf.xdp.data;
-          frag_size = MLX5_SKB_FRAG_SZ(rx_headroom + cqe_bcnt);
-          if (unlikely(!skb)) {
+          skbcpy = napi_alloc_skb(rq->cq.napi, cqe_bcnt);
+          // skbptr = skbcpy;
+          // pr_info("4: tailroom=%u cqe_bcnt=%u\n", skb_tailroom(skbptr),
+          //         cqe_bcnt_skb);
+
+          if (unlikely(!skbcpy)) {
             rq->stats->buff_alloc_err++;
-            return NULL;
+            break;
           }
 
-          skb_reserve(skb, rx_headroom);
-
-          skb_put_data(skb, data, cqe_bcnt);
+          skb_reserve(skbcpy, rx_headroom);
+          skb_put_data(skbcpy, data, cqe_bcnt);
 
           if (metasize)
-            skb_metadata_set(skb, metasize);
+            skb_metadata_set(skbcpy, metasize);
 
           /* queue up for recycling/reuse */
-          skb_mark_for_recycle(skb);
-          frag_page->frags++;
-          if (skb) {
+          skb_mark_for_recycle(skbcpy);
+          if (skbcpy) {
 
-            mlx5e_complete_rx_cqe(rq, cqe, cqe_bcnt, skb);
+            mlx5e_complete_rx_cqe(rq, cqe, cqe_bcnt, skbcpy);
 
             if (mlx5e_cqe_regb_chain(cqe))
-              if (!mlx5e_tc_update_skb_nic(cqe, skb)) {
-                dev_kfree_skb_any(skb);
-                goto xdp_clone_tx_exit;
+              if (!mlx5e_tc_update_skb_nic(cqe, skbcpy)) {
+                dev_kfree_skb_any(skbcpy);
+                goto xdp_clone_pass_exit;
               }
 
-            napi_gro_receive(rq->cq.napi, skb);
+            napi_gro_receive(rq->cq.napi, skbcpy);
           }
-          continue;
         } break;
+        // case XDP_PASS: {
+        //   rx_headroom = mxbuf.xdp.data - mxbuf.xdp.data_hard_start;
+        //   metasize = mxbuf.xdp.data_meta - mxbuf.xdp.data;
+        //   cqe_bcnt = mxbuf.xdp.data_end - mxbuf.xdp.data;
+        //   frag_size = MLX5_SKB_FRAG_SZ(rx_headroom + cqe_bcnt);
+        //   if (unlikely(!skb)) {
+        //     rq->stats->buff_alloc_err++;
+        //     return NULL;
+        //   }
+
+        //   skb_reserve(skb, rx_headroom);
+
+        //   skb_put_data(skb, data, cqe_bcnt);
+
+        //   if (metasize)
+        //     skb_metadata_set(skb, metasize);
+
+        //   /* queue up for recycling/reuse */
+        //   skb_mark_for_recycle(skb);
+        //   frag_page->frags++;
+        //   if (skb) {
+
+        //     mlx5e_complete_rx_cqe(rq, cqe, cqe_bcnt, skb);
+
+        //     if (mlx5e_cqe_regb_chain(cqe))
+        //       if (!mlx5e_tc_update_skb_nic(cqe, skb)) {
+        //         dev_kfree_skb_any(skb);
+        //         goto xdp_clone_tx_exit;
+        //       }
+
+        //     napi_gro_receive(rq->cq.napi, skb);
+        //   }
+        // } break;
         case XDP_TX: {
           if (unlikely(!mlx5e_xmit_xdp_buff(rq->xdpsq, rq, xdp)))
             goto xdp_clone_tx_abort_cpy;
@@ -2102,7 +2167,7 @@ static struct sk_buff *mlx5e_skb_from_cqe_linear(struct mlx5e_rq *rq,
         }
       }
     xdp_clone_tx_exit:
-      return skb;
+      return NULL;
     }
     // case XDP_CLONE_TX: {
     //   mxbuf.xdp.data_meta = va + rx_headroom;
