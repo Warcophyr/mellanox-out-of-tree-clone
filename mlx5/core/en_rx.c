@@ -1889,7 +1889,7 @@ static struct sk_buff *mlx5e_skb_from_cqe_linear(struct mlx5e_rq *rq,
       cqe_bcnt = mxbuf.xdp.data_end - mxbuf.xdp.data;
       frag_size = MLX5_SKB_FRAG_SZ(rx_headroom + cqe_bcnt);
       // skb = napi_build_skb(va, frag_size);
-      skb = napi_alloc_skb(rq->cq.napi, cqe_bcnt);
+      skb = napi_alloc_skb(rq->cq.napi, (cqe_bcnt * (num_copy + 1)));
       if (unlikely(!skb)) {
         rq->stats->buff_alloc_err++;
         return NULL;
@@ -1931,7 +1931,8 @@ static struct sk_buff *mlx5e_skb_from_cqe_linear(struct mlx5e_rq *rq,
         }
         switch (actcpy) {
         case XDP_PASS: {
-          skbcpy = napi_alloc_skb(rq->cq.napi, cqe_bcnt);
+          skbcpy = napi_alloc_skb(rq->cq.napi, (cqe_bcnt * (num_copy + 1)));
+          // skbcpy = napi_alloc_skb(rq->cq.napi, (cqe_bcnt));
           // skbptr = skbcpy;
           // pr_info("4: tailroom=%u cqe_bcnt=%u\n", skb_tailroom(skbptr),
           //         cqe_bcnt_skb);
@@ -1998,9 +1999,11 @@ static struct sk_buff *mlx5e_skb_from_cqe_linear(struct mlx5e_rq *rq,
         //   // }
         // } break;
         case XDP_TX: {
+          // pr_info("__num_copy=%d\n", __num_copy);
           if (unlikely(!mlx5e_xmit_xdp_buff(rq->xdpsq, rq, xdp)))
             goto xdp_clone_pass_abort_cpy;
           __set_bit(MLX5E_RQ_FLAG_XDP_XMIT, rq->flags); /* non-atomic */
+          pr_info("__num_copy=%d\n", __num_copy);
           rcu_read_lock();
           mlx5e_xmit_xdp_doorbell(rq->xdpsq);
           mlx5e_poll_xdpsq_cq(&rq->xdpsq->cq);
@@ -2068,7 +2071,8 @@ static struct sk_buff *mlx5e_skb_from_cqe_linear(struct mlx5e_rq *rq,
         }
         switch (actcpy) {
         case XDP_PASS: {
-          skbcpy = napi_alloc_skb(rq->cq.napi, cqe_bcnt);
+          skbcpy = napi_alloc_skb(rq->cq.napi, (cqe_bcnt * (num_copy + 1)));
+          // skbcpy = napi_alloc_skb(rq->cq.napi, cqe_bcnt);
           // skbptr = skbcpy;
           // pr_info("4: tailroom=%u cqe_bcnt=%u\n", skb_tailroom(skbptr),
           //         cqe_bcnt_skb);
