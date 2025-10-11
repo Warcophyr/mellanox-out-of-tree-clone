@@ -1878,7 +1878,7 @@ static struct sk_buff *mlx5e_skb_from_cqe_linear(struct mlx5e_rq *rq,
       int __num_copy = act >> 5;
       int __xdp_clone = (act & 0x1F);
       num_copy = __num_copy >= 0 ? __num_copy : 0;
-      pr_info("xdp_clone=%d num_copy=%d\n", __xdp_clone, num_copy);
+      // pr_info("xdp_clone=%d num_copy=%d\n", __xdp_clone, num_copy);
       act = __xdp_clone;
     }
     switch (act) {
@@ -2003,7 +2003,7 @@ static struct sk_buff *mlx5e_skb_from_cqe_linear(struct mlx5e_rq *rq,
           if (unlikely(!mlx5e_xmit_xdp_buff(rq->xdpsq, rq, xdp)))
             goto xdp_clone_pass_abort_cpy;
           __set_bit(MLX5E_RQ_FLAG_XDP_XMIT, rq->flags); /* non-atomic */
-          pr_info("__num_copy=%d\n", __num_copy);
+          // pr_info("__num_copy=%d\n", __num_copy);
           rcu_read_lock();
           mlx5e_xmit_xdp_doorbell(rq->xdpsq);
           mlx5e_poll_xdpsq_cq(&rq->xdpsq->cq);
