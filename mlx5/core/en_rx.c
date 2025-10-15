@@ -1835,8 +1835,8 @@ static struct sk_buff *mlx5e_skb_from_cqe_linear(struct mlx5e_rq *rq,
   u16 *metadata;
   // rq_global = rq;
   // cqe_global = cqe;
-  const int XDP_CLONE_PASS = 6;
-  const int XDP_CLONE_TX = 7;
+  const int XDP_CLONE_PASS = 5;
+  const int XDP_CLONE_TX = 6;
 
   va = page_address(frag_page->page) + wi->offset;
   data = va + rx_headroom;
